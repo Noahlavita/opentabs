@@ -73,9 +73,14 @@ const structureTypes = {
 };
 
 const artilleryTypes = {
-  shell: { name: "Colpo standard", cost: 900, radius: 18, damage: 220, hotkey: "4" },
-  heavyShell: { name: "Colpo pesante", cost: 1800, radius: 30, damage: 420, hotkey: "5" }
+  shell: { name: "Colpo standard", cost: 1350, radius: 15, damage: 180, hotkey: "4" },
+  heavyShell: { name: "Colpo pesante", cost: 2550, radius: 24, damage: 320, hotkey: "5" }
 };
+
+const CANNON_ARTILLERY_COOLDOWN_BASE = 14;
+const CANNON_ARTILLERY_COOLDOWN_STEP = 2;
+const CANNON_ARTILLERY_COOLDOWN_MIN = 4;
+const ARTILLERY_PROJECTILE_SPEED = 1.85;
 
 const state = {
   currentMap: null,
@@ -154,6 +159,41 @@ function currentMinerPop(owner = "player") { return state.units.filter((u) => u.
 function currentMineCount(owner = "player") { return state.structures.filter((s) => s.owner === owner && s.type === "mine").reduce((sum, structure) => sum + (structure.level || 1), 0); }
 function castleUpgradeCost() { return Math.floor(1000 * Math.pow(1.7, state.castleLevel - 1)); }
 function playerCannons() { return state.structures.filter((s) => s.owner === "player" && s.type === "cannon"); }
+function cannonArtilleryCooldown(structure) {
+  const level = structure?.level || 1;
+  return Math.max(CANNON_ARTILLERY_COOLDOWN_MIN, CANNON_ARTILLERY_COOLDOWN_BASE - (level - 1) * CANNON_ARTILLERY_COOLDOWN_STEP);
+}
+function bestReadyArtilleryCannon(owner, targetPoint) {
+  const readyCannons = state.structures.filter((s) => s.owner === owner && s.type === "cannon" && s.cooldown <= 0);
+  if (!readyCannons.length) return null;
+  return readyCannons
+    .map((entry) => ({ entry, d: Math.hypot(rectCenter(entry).x - targetPoint.x, rectCenter(entry).y - targetPoint.y) }))
+    .sort((a, b) => a.d - b.d)[0]?.entry || null;
+}
+function shortestArtilleryCooldown(owner) {
+  return state.structures
+    .filter((s) => s.owner === owner && s.type === "cannon")
+    .reduce((best, cannon) => Math.min(best, Math.max(0, cannon.cooldown || 0)), Infinity);
+}
+function cannonCooldownPercent(structure) {
+  const total = cannonArtilleryCooldown(structure);
+  if (total <= 0) return 0;
+  return clamp(Math.max(0, structure.cooldown || 0) / total, 0, 1);
+}
+function artilleryFlightProgress(projectile) {
+  const flightTime = projectile.artillery ? (projectile.flightTime || ARTILLERY_PROJECTILE_SPEED) : (1 / 4.5);
+  return clamp(projectile.age / flightTime, 0, 1);
+}
+function projectileDrawPoint(projectile) {
+  const t = artilleryFlightProgress(projectile);
+  const x = projectile.x + (projectile.tx - projectile.x) * t;
+  const baseY = projectile.y + (projectile.ty - projectile.y) * t;
+  if (!projectile.artillery) return { x, y: baseY, t };
+  const distance = Math.hypot(projectile.tx - projectile.x, projectile.ty - projectile.y);
+  const arcHeight = Math.max(8, Math.min(34, distance * 0.12));
+  const y = baseY - Math.sin(t * Math.PI) * arcHeight;
+  return { x, y, t };
+}
 
 const PERF = {
   unitGridSize: 10,
@@ -1374,11 +1414,14 @@ function fireArtillery(type, targetPoint) {
   const cannons = playerCannons();
   if (!cannons.length) return showToast("Serve almeno un cannone.");
   if (state.money < ammo.cost) return showToast("Oro insufficiente per l'artiglieria.");
-  const cannon = cannons.map((entry) => ({ entry, d: Math.hypot(rectCenter(entry).x - targetPoint.x, rectCenter(entry).y - targetPoint.y) })).sort((a, b) => a.d - b.d)[0]?.entry;
-  if (!cannon) return;
+  const cannon = bestReadyArtilleryCannon("player", targetPoint);
+  if (!cannon) {
+    const nextReadyIn = shortestArtilleryCooldown("player");
+    return showToast(Number.isFinite(nextReadyIn) ? `Cannoni in ricarica: pronti tra ${nextReadyIn.toFixed(1)}s.` : "Cannoni in ricarica.");
+  }
   state.money -= ammo.cost;
   const origin = rectCenter(cannon);
-  const projectile = { x: origin.x, y: origin.y, tx: targetPoint.x, ty: targetPoint.y, age: 0, artillery: true, artilleryType: type, radius: ammo.radius, damage: ammo.damage, owner: cannon.owner };
+  const projectile = { x: origin.x, y: origin.y, tx: targetPoint.x, ty: targetPoint.y, age: 0, artillery: true, artilleryType: type, radius: ammo.radius, damage: ammo.damage, owner: cannon.owner, flightTime: ARTILLERY_PROJECTILE_SPEED };
   const wallHit = projectileWallHit(projectile);
   if (wallHit) {
     const hitX = (wallHit.x1 + wallHit.x2) / 2;
@@ -1388,13 +1431,14 @@ function fireArtillery(type, targetPoint) {
     projectile.blockedByWallId = wallHit.id;
   }
   state.projectiles.push(projectile);
+  cannon.cooldown = cannonArtilleryCooldown(cannon);
   state.selectedArtillery = null;
 }
 
 function createArtilleryProjectile(cannon, type, targetPoint) {
   const ammo = artilleryTypes[type];
   const origin = rectCenter(cannon);
-  const projectile = { x: origin.x, y: origin.y, tx: targetPoint.x, ty: targetPoint.y, age: 0, artillery: true, artilleryType: type, radius: ammo.radius, damage: ammo.damage, owner: cannon.owner };
+  const projectile = { x: origin.x, y: origin.y, tx: targetPoint.x, ty: targetPoint.y, age: 0, artillery: true, artilleryType: type, radius: ammo.radius, damage: ammo.damage, owner: cannon.owner, flightTime: ARTILLERY_PROJECTILE_SPEED };
   const wallHit = projectileWallHit(projectile);
   if (wallHit) {
     projectile.tx = (wallHit.x1 + wallHit.x2) / 2;
@@ -1407,14 +1451,22 @@ function createArtilleryProjectile(cannon, type, targetPoint) {
 function applyExplosion(projectile) {
   const center = { x: projectile.tx, y: projectile.ty };
   state.explosions.push({ x: center.x, y: center.y, r: projectile.radius, age: 0 });
+  const falloffRadius = Math.max(1, projectile.radius);
+  const damageAtDistance = (distance) => {
+    if (distance > falloffRadius) return 0;
+    const t = distance / falloffRadius;
+    return projectile.damage * (1 - 0.75 * t);
+  };
   if (projectile.blockedByWallId) {
     const blockedWall = state.structures.find((structure) => structure.id === projectile.blockedByWallId);
-    if (blockedWall) damageItem(blockedWall, projectile.damage * 1.3, center);
+    if (blockedWall) damageItem(blockedWall, damageAtDistance(0) * 1.3, center);
   }
   for (const unit of [...state.units]) {
     for (const member of [...unit.members]) {
       if (projectile.blockedByWallId && attackBlockedByWall(projectile.owner || null, center, { x: member.x, y: member.y })) continue;
-      if (Math.hypot(member.x - center.x, member.y - center.y) <= projectile.radius) member.hp -= projectile.damage;
+      const distance = Math.hypot(member.x - center.x, member.y - center.y);
+      const damage = damageAtDistance(distance);
+      if (damage > 0) member.hp -= damage;
     }
     unit.members = unit.members.filter((member) => member.hp > 0);
     if (!unitCount(unit)) state.units = state.units.filter((u) => u.id !== unit.id);
@@ -1424,7 +1476,9 @@ function applyExplosion(projectile) {
     if (structure.type === "castle") continue;
     if (projectile.blockedByWallId && structure.id !== projectile.blockedByWallId && structure.type !== "wallSegment" && Math.hypot(rectCenter(structure).x - center.x, rectCenter(structure).y - center.y) > projectile.radius * 0.65) continue;
     if (projectile.blockedByWallId && structure.id !== projectile.blockedByWallId && attackBlockedByWall(projectile.owner || null, center, rectCenter(structure))) continue;
-    if (Math.hypot(rectCenter(structure).x - center.x, rectCenter(structure).y - center.y) <= projectile.radius + Math.max(structure.w, structure.h) * 0.5) damageItem(structure, projectile.damage * 2, center);
+    const distance = Math.hypot(rectCenter(structure).x - center.x, rectCenter(structure).y - center.y);
+    const structureDamage = damageAtDistance(distance);
+    if (structureDamage > 0) damageItem(structure, structureDamage * 2, center);
   }
 }
 
@@ -1745,6 +1799,7 @@ function updateUnits(dt) {
 
 function updateStructures(dt) {
   for (const structure of state.structures) {
+    structure.cooldown = Math.max(0, (structure.cooldown || 0) - dt);
     const stats = structureStats(structure);
     if (structure.type === "mine") {
       const gain = stats.income * dt;
@@ -1755,7 +1810,6 @@ function updateStructures(dt) {
       }
     }
     if (!stats.range) continue;
-    structure.cooldown -= dt;
     if (structure.cooldown > 0) continue; // Skip target search if can't fire yet
     const center = rectCenter(structure);
     const range = stats.range;
@@ -1792,8 +1846,9 @@ function updateStructures(dt) {
 function updateProjectiles(dt) {
   const remainingProjectiles = [];
   for (const p of state.projectiles) {
-    p.age += dt * 4.5;
-    if (p.age >= 1) {
+    p.age += dt;
+    const flightTime = p.artillery ? (p.flightTime || ARTILLERY_PROJECTILE_SPEED) : (1 / 4.5);
+    if (p.age >= flightTime) {
       if (p.artillery) applyExplosion(p);
       else if (p.blockedByWallId) {
         const blockedWall = state.structures.find((structure) => structure.id === p.blockedByWallId);
@@ -2197,6 +2252,26 @@ function aiTryUpgradeWall(ai) {
   return true;
 }
 
+function aiTryUpgradeCannon(ai) {
+  if (ai.money < structureTypes.cannon.cost) return false;
+  const enemyHasCannon = state.structures.some((s) => s.owner !== ai.owner && s.type === "cannon");
+  const threat = aiThreatScore(ai, aiBase(ai)?.center || { x: 0, y: 0 }, 130);
+  const cannons = state.structures
+    .filter((s) => s.owner === ai.owner && s.type === "cannon")
+    .sort((a, b) => {
+      const levelDiff = (a.level || 1) - (b.level || 1);
+      if (levelDiff !== 0) return levelDiff;
+      return (a.cooldown || 0) - (b.cooldown || 0);
+    });
+  const cannon = cannons[0];
+  if (!cannon || (cannon.level || 1) >= 4) return false;
+  const shouldUpgrade = enemyHasCannon || cannons.length >= 2 || threat >= 26 || ai.money >= structureTypes.cannon.cost * 2.6;
+  if (!shouldUpgrade) return false;
+  ai.money -= structureTypes.cannon.cost;
+  upgradeStructure(cannon);
+  return true;
+}
+
 function aiPreferredTarget(ai, spawn) {
   const attackTargets = state.structures
     .filter((s) => s.owner !== ai.owner && s.type !== "wall" && s.type !== "wallSegment" && s.type !== "bridgeSegment")
@@ -2312,6 +2387,7 @@ function aiUpdate(dt) {
 
     // Upgrade walls even without enemy cannons - whenever perimeter is complete and money allows
     if (ai.money >= structureTypes.wall.cost * 1.4 && aiTryUpgradeWall(ai)) continue;
+    if (ai.money >= structureTypes.cannon.cost * 1.35 && aiTryUpgradeCannon(ai)) continue;
 
     const aiCannons = state.structures.filter((s) => s.owner === ai.owner && s.type === "cannon");
     const shellType = ai.money >= artilleryTypes.heavyShell.cost && Math.random() < 0.35 ? "heavyShell" : "shell";
@@ -2322,10 +2398,14 @@ function aiUpdate(dt) {
       const targets = state.structures.filter((s) => s.owner !== ai.owner && s.type !== "castle");
       const target = targets.sort((a, b) => Math.hypot(rectCenter(a).x - spawn.x, rectCenter(a).y - spawn.y) - Math.hypot(rectCenter(b).x - spawn.x, rectCenter(b).y - spawn.y))[0];
       if (bestUnitCluster || target) {
-        ai.money -= artilleryTypes[shellType].cost;
         const t = bestUnitCluster ? { x: bestUnitCluster.x, y: bestUnitCluster.y } : rectCenter(target);
-        state.projectiles.push(createArtilleryProjectile(aiCannons[0], shellType, t));
-        ai.shellTimer = 8 + Math.random() * 5;
+        const cannon = bestReadyArtilleryCannon(ai.owner, t);
+        if (cannon) {
+          ai.money -= artilleryTypes[shellType].cost;
+          state.projectiles.push(createArtilleryProjectile(cannon, shellType, t));
+          cannon.cooldown = cannonArtilleryCooldown(cannon);
+          ai.shellTimer = 8 + Math.random() * 5;
+        }
       }
     }
   }
@@ -2438,7 +2518,13 @@ function updateUI() {
       const spec = structureTypes[selected.type];
       const stats = structureStats(selected);
       ui.selectionName.textContent = `${spec.name} Lv ${selected.level}`;
-      ui.selectionStats.textContent = selected.type === "wall" ? `Ancora muro senza HP - collegamenti ${wallConnectionCount(selected)}/2` : selected.type === "bridge" ? `Ancora ponte senza HP - collegamenti ${bridgeConnectionCount(selected)}/2` : `HP ${Math.max(0, Math.ceil(selected.hp))}/${selected.maxHp} - Danno ${stats.damage.toFixed(0)} - Range ${stats.range.toFixed(0)} - Entrate ${stats.income.toFixed(1)}`;
+      ui.selectionStats.textContent = selected.type === "wall"
+        ? `Ancora muro senza HP - collegamenti ${wallConnectionCount(selected)}/2`
+        : selected.type === "bridge"
+          ? `Ancora ponte senza HP - collegamenti ${bridgeConnectionCount(selected)}/2`
+          : selected.type === "cannon"
+            ? `HP ${Math.max(0, Math.ceil(selected.hp))}/${selected.maxHp} - Ricarica ${Math.max(0, selected.cooldown || 0).toFixed(1)}s/${cannonArtilleryCooldown(selected).toFixed(1)}s`
+            : `HP ${Math.max(0, Math.ceil(selected.hp))}/${selected.maxHp} - Danno ${stats.damage.toFixed(0)} - Range ${stats.range.toFixed(0)} - Entrate ${stats.income.toFixed(1)}`;
     }
   }
   updateButtons();
@@ -2525,6 +2611,13 @@ function drawStructure(s) {
     ctx.fillRect(s.x + 1, s.y + 3, s.w - 2, s.h - 3);
     ctx.fillStyle = "#303030";
     ctx.fillRect(s.x + 2, s.y + 1, s.w - 4, 3);
+    const cooldownFill = cannonCooldownPercent(s);
+    if (cooldownFill > 0) {
+      ctx.fillStyle = "#1d1d19";
+      ctx.fillRect(s.x - 1, s.y - 7, s.w + 2, 3);
+      ctx.fillStyle = "#f29c38";
+      ctx.fillRect(s.x - 1, s.y - 7, Math.max(1, (s.w + 2) * cooldownFill), 3);
+    }
   } else if (s.type === "wall") {
     ctx.fillRect(s.x + 1, s.y + 1, s.w - 2, s.h - 2);
     ctx.fillStyle = "#d2c5a3";
@@ -2558,13 +2651,11 @@ function drawStructure(s) {
     ctx.fillRect(s.x, s.y - 4, s.w, 2);
     ctx.fillStyle = "#78d85d";
     ctx.fillRect(s.x, s.y - 4, Math.max(1, s.w * structureHpPercent(s)), 2);
-  }
-  if ((s.level || 1) > 1) {
-    ctx.fillStyle = "#050505";
-    ctx.fillRect(s.x + s.w - 10, s.y - 8, 10, 8);
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "bold 7px monospace";
-    ctx.fillText(String(s.level), s.x + s.w - 8, s.y - 2);
+    if ((s.level || 1) > 1) {
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 7px monospace";
+      ctx.fillText(`Lv${s.level}`, s.x + s.w + 2, s.y - 2);
+    }
   }
 }
 
@@ -2596,11 +2687,28 @@ function drawSwarm(unit) {
 
 function drawProjectiles() {
   for (const p of state.projectiles) {
-    if (p.artillery) ctx.fillStyle = p.artilleryType === "heavyShell" ? "#ff9d4d" : "#f6df73";
-    else ctx.fillStyle = "#f6df73";
-    const x = p.x + (p.tx - p.x) * p.age;
-    const y = p.y + (p.ty - p.y) * p.age;
-    ctx.fillRect(Math.round(x), Math.round(y), p.artillery ? 3 : 2, p.artillery ? 3 : 2);
+    const point = projectileDrawPoint(p);
+    if (p.artillery) {
+      const trailT = Math.max(0, point.t - 0.08);
+      const tailX = p.x + (p.tx - p.x) * trailT;
+      const tailBaseY = p.y + (p.ty - p.y) * trailT;
+      const distance = Math.hypot(p.tx - p.x, p.ty - p.y);
+      const arcHeight = Math.max(8, Math.min(34, distance * 0.12));
+      const tailY = tailBaseY - Math.sin(trailT * Math.PI) * arcHeight;
+      ctx.strokeStyle = p.artilleryType === "heavyShell" ? "rgba(255, 138, 52, 0.42)" : "rgba(245, 221, 109, 0.4)";
+      ctx.lineWidth = p.artilleryType === "heavyShell" ? 2 : 1.5;
+      ctx.beginPath();
+      ctx.moveTo(tailX, tailY);
+      ctx.lineTo(point.x, point.y);
+      ctx.stroke();
+      ctx.fillStyle = p.artilleryType === "heavyShell" ? "#ff9d4d" : "#f6df73";
+      ctx.fillRect(Math.round(point.x) - 2, Math.round(point.y) - 2, 5, 5);
+      ctx.fillStyle = "rgba(255, 245, 214, 0.72)";
+      ctx.fillRect(Math.round(point.x) - 1, Math.round(point.y) - 1, 2, 2);
+    } else {
+      ctx.fillStyle = "#f6df73";
+      ctx.fillRect(Math.round(point.x), Math.round(point.y), 2, 2);
+    }
   }
   for (const e of state.explosions) {
     ctx.strokeStyle = `rgba(255, 180, 80, ${1 - e.age / 0.35})`;
