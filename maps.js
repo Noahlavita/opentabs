@@ -13,50 +13,17 @@ const state = {
   selectedMapId: null
 };
 
-function presetBySize(sizeKey) {
-  if (sizeKey === "gigantic") return { width: 1536, height: 960, players: 5 };
-  if (sizeKey === "huge") return { width: 1200, height: 720, players: 4 };
-  if (sizeKey === "large") return { width: 896, height: 512, players: 4 };
-  if (sizeKey === "medium") return { width: 640, height: 384, players: 3 };
-  return { width: 384, height: 256, players: 2 };
-}
-
-function createPlainMap(sizeKey, name) {
-  const preset = presetBySize(sizeKey);
-  const spawns = [
-    { owner: "player", x: 28, y: preset.height / 2 },
-    { owner: "enemy-1", x: preset.width - 28, y: preset.height / 2 }
-  ];
-  if (preset.players >= 3) spawns.push({ owner: "enemy-2", x: preset.width / 2, y: 34 });
-  if (preset.players >= 4) spawns.push({ owner: "enemy-3", x: preset.width / 2, y: preset.height - 34 });
-  if (preset.players >= 5) spawns.push({ owner: "enemy-4", x: preset.width * 0.75, y: preset.height * 0.25 });
-  return { id: crypto.randomUUID(), name, sizeKey, width: preset.width, height: preset.height, players: preset.players, grass: [], waters: [], rocks: [], spawns };
+function cloneDefaultDuelMap() {
+  if (typeof structuredClone === "function") return structuredClone(DEFAULT_DUEL_MAP);
+  return JSON.parse(JSON.stringify(DEFAULT_DUEL_MAP));
 }
 
 function defaultMaps() {
-  return [
-    createPlainMap("small", "Pianura Piccola"),
-    createPlainMap("medium", "Pianura Media"),
-    createPlainMap("large", "Pianura Grande"),
-    createPlainMap("huge", "Pianura Enorme"),
-    createPlainMap("gigantic", "Pianura Gigantesca")
-  ];
+  return [cloneDefaultDuelMap()];
 }
 
 function loadMaps() {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) {
-    const maps = defaultMaps();
-    saveMaps(maps);
-    return maps;
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length) return parsed;
-  } catch {}
-  const maps = defaultMaps();
-  saveMaps(maps);
-  return maps;
+  return defaultMaps();
 }
 
 function saveMaps(maps) { localStorage.setItem(STORAGE_KEY, JSON.stringify(maps)); }
@@ -111,17 +78,19 @@ ui.startSelectedMap.addEventListener("click", () => {
   window.location.assign("play.html");
 });
 
-ui.mapImport.addEventListener("change", async (event) => {
-  const file = event.target.files?.[0];
-  if (!file) return;
-  const text = await file.text();
-  const imported = JSON.parse(text);
-  if (!imported.id) imported.id = crypto.randomUUID();
-  const maps = loadMaps();
-  maps.push(imported);
-  saveMaps(maps);
-  state.selectedMapId = imported.id;
-  renderMapList();
-});
+if (ui.mapImport) {
+  ui.mapImport.addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    const imported = JSON.parse(text);
+    if (!imported.id) imported.id = crypto.randomUUID();
+    const maps = loadMaps();
+    maps.push(imported);
+    saveMaps(maps);
+    state.selectedMapId = imported.id;
+    renderMapList();
+  });
+}
 
 renderMapList();
