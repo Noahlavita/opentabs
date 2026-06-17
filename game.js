@@ -2291,7 +2291,7 @@ function aiWaveChargeDuration(hostilePower, hostileArmy, reservePower) {
 }
 
 function aiWaveAttackDuration(hostileArmy, hostilePower) {
-  return clamp(8 + hostileArmy * 0.08 + hostilePower / 220, 8, 18);
+  return clamp(12 + hostileArmy * 0.12 + hostilePower / 180, 12, 26);
 }
 
 function aiActiveWaveUnits(ai, units) {
@@ -2398,7 +2398,10 @@ function aiUpdate(dt) {
     } else {
       if (committedTarget) {
         for (const unit of activeWaveUnits) {
-          if (distanceToItemFromPoint(committedTarget, unit) > unitTypes[unit.type].range + 8) moveUnitTo(unit, rectCenter(committedTarget).x, rectCenter(committedTarget).y, committedTarget.id);
+          const pursueBuffer = unit.type === "archer" ? 8 : 2;
+          if (distanceToItemFromPoint(committedTarget, unit) > unitTypes[unit.type].range + pursueBuffer) {
+            moveUnitTo(unit, rectCenter(committedTarget).x, rectCenter(committedTarget).y, committedTarget.id);
+          }
         }
       }
       if (waveReady && preferredTarget) {
