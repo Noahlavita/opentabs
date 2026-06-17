@@ -74,12 +74,12 @@ const structureTypes = {
 
 const artilleryTypes = {
   shell: { name: "Colpo standard", cost: 1350, radius: 15, damage: 180, hotkey: "4" },
-  heavyShell: { name: "Colpo pesante", cost: 2550, radius: 24, damage: 320, hotkey: "5" }
+  heavyShell: { name: "Colpo pesante", cost: 2850, radius: 24, damage: 320, hotkey: "5" }
 };
 
-const CANNON_ARTILLERY_COOLDOWN_BASE = 14;
+const CANNON_ARTILLERY_COOLDOWN_BASE = 16;
 const CANNON_ARTILLERY_COOLDOWN_STEP = 2;
-const CANNON_ARTILLERY_COOLDOWN_MIN = 4;
+const CANNON_ARTILLERY_COOLDOWN_MIN = 5;
 const ARTILLERY_PROJECTILE_SPEED = 1.85;
 
 const state = {
@@ -1452,6 +1452,8 @@ function applyExplosion(projectile) {
   const center = { x: projectile.tx, y: projectile.ty };
   state.explosions.push({ x: center.x, y: center.y, r: projectile.radius, age: 0 });
   const falloffRadius = Math.max(1, projectile.radius);
+  const structureDamageMultiplier = projectile.artilleryType === "heavyShell" ? 4.4 : 2;
+  const blockedWallDamageMultiplier = projectile.artilleryType === "heavyShell" ? 3.1 : 1.3;
   const damageAtDistance = (distance) => {
     if (distance > falloffRadius) return 0;
     const t = distance / falloffRadius;
@@ -1459,7 +1461,7 @@ function applyExplosion(projectile) {
   };
   if (projectile.blockedByWallId) {
     const blockedWall = state.structures.find((structure) => structure.id === projectile.blockedByWallId);
-    if (blockedWall) damageItem(blockedWall, damageAtDistance(0) * 1.3, center);
+    if (blockedWall) damageItem(blockedWall, damageAtDistance(0) * blockedWallDamageMultiplier, center);
   }
   for (const unit of [...state.units]) {
     for (const member of [...unit.members]) {
@@ -1478,7 +1480,7 @@ function applyExplosion(projectile) {
     if (projectile.blockedByWallId && structure.id !== projectile.blockedByWallId && attackBlockedByWall(projectile.owner || null, center, rectCenter(structure))) continue;
     const distance = Math.hypot(rectCenter(structure).x - center.x, rectCenter(structure).y - center.y);
     const structureDamage = damageAtDistance(distance);
-    if (structureDamage > 0) damageItem(structure, structureDamage * 2, center);
+    if (structureDamage > 0) damageItem(structure, structureDamage * structureDamageMultiplier, center);
   }
 }
 
@@ -2656,6 +2658,10 @@ function drawStructure(s) {
       ctx.font = "bold 7px monospace";
       ctx.fillText(`Lv${s.level}`, s.x + s.w + 2, s.y - 2);
     }
+  } else if ((s.level || 1) > 1) {
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 7px monospace";
+    ctx.fillText(String(s.level), s.x + s.w - 8, s.y - 2);
   }
 }
 
