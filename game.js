@@ -685,6 +685,15 @@ function moveUnitTo(unit, x, y, attackTargetId = null) {
   if (len > 0.5) { unit.facingX = dx / len; unit.facingY = dy / len; }
 }
 
+function unitStableOffset(unit, spread = 6) {
+  if (!Number.isFinite(unit.aiOffsetX) || !Number.isFinite(unit.aiOffsetY)) {
+    const seed = Array.from(String(unit.id || "0")).reduce((sum, ch) => sum + ch.charCodeAt(0), 0);
+    unit.aiOffsetX = ((seed % 11) - 5) * (spread / 5);
+    unit.aiOffsetY = (((Math.floor(seed / 7)) % 11) - 5) * (spread / 5);
+  }
+  return { x: unit.aiOffsetX, y: unit.aiOffsetY };
+}
+
 function unitNavigationTarget(unit, finalTarget) {
   const direct = { x: finalTarget.x, y: finalTarget.y };
   if (unit.navFrame === PERF.frameIndex && Math.hypot((unit.navFinalX ?? Infinity) - direct.x, (unit.navFinalY ?? Infinity) - direct.y) < 0.5) {
@@ -2290,6 +2299,7 @@ function aiTryUpgradeCannon(ai) {
 }
 
 function aiPreferredTarget(ai, spawn) {
+  const lateGame = state.gameTime > 90;
   const attackTargets = state.structures
     .filter((s) => s.owner !== ai.owner && s.type !== "wall" && s.type !== "wallSegment" && s.type !== "bridgeSegment")
     .map((structure) => {
@@ -2297,7 +2307,8 @@ function aiPreferredTarget(ai, spawn) {
       const distance = Math.hypot(center.x - spawn.x, center.y - spawn.y);
       const priority = structure.type === "castle" ? 220 : structure.type === "tower" ? 150 : structure.type === "cannon" ? 135 : structure.type === "barracks" ? 120 : 70;
       const playerFocusPenalty = structure.owner === "player" ? ai.attackBias * 70 : 0;
-      return { structure, score: priority - distance * 0.28 - playerFocusPenalty + (1 - structureHpPercent(structure)) * 80 };
+      const lockedOwnerBonus = ai.focusOwner && structure.owner === ai.focusOwner ? (lateGame ? 120 : 70) : 0;
+      return { structure, score: priority - distance * 0.28 - playerFocusPenalty + lockedOwnerBonus + (1 - structureHpPercent(structure)) * 80 };
     })
     .sort((a, b) => b.score - a.score);
   return attackTargets[0]?.structure || null;
@@ -2373,6 +2384,7 @@ function aiUpdate(dt) {
     ai.buildTimer -= dt;
     ai.shellTimer = (ai.shellTimer ?? 7) - dt;
     ai.attackBias = Math.max(0, (ai.attackBias || 0) - dt * 0.08);
+    if ((ai.focusUntil || 0) > 0 && state.gameTime >= ai.focusUntil) ai.focusOwner = null;
     if (ai.buildTimer <= 0) {
       const built = aiTryBuild(ai);
       const mines = currentMineCount(ai.owner);
@@ -2423,13 +2435,15 @@ function aiUpdate(dt) {
       const rally = aiRallyPoint(ai);
       if (rally) {
         for (const unit of ownedArmy) {
-          if (Math.hypot(unit.x - rally.x, unit.y - rally.y) > 28) moveUnitTo(unit, rally.x, rally.y + Math.random() * 10 - 5, null);
+          const offset = unitStableOffset(unit, 5);
+          if (Math.hypot(unit.x - (rally.x + offset.x), unit.y - (rally.y + offset.y)) > 24) moveUnitTo(unit, rally.x + offset.x, rally.y + offset.y, null);
         }
       }
     } else if (!committedWaveActive && perimeterProgress.complete && !armyContained && !attackReady) {
       for (const unit of ownedArmy) {
         const rally = aiNearestInsidePerimeterPoint(ai, unit, 16);
-        moveUnitTo(unit, rally.x, rally.y, null);
+        const offset = unitStableOffset(unit, 4);
+        moveUnitTo(unit, rally.x + offset.x, rally.y + offset.y, null);
       }
     } else {
       if (committedTarget) {
@@ -2442,13 +2456,16 @@ function aiUpdate(dt) {
       }
       if (waveReady && preferredTarget) {
         aiLaunchWave(ai, reserveArmy, preferredTarget, hostileArmy, hostilePower);
+        ai.focusOwner = preferredTarget.owner;
+        ai.focusUntil = state.gameTime + (state.gameTime > 90 ? 45 : 24);
         ai.waveChargeUntil = 0;
         ai.waveChargeTargetId = null;
       }
       const rally = aiRallyPoint(ai);
       if (rally) {
         for (const unit of reserveArmy) {
-          if (Math.hypot(unit.x - rally.x, unit.y - rally.y) > 28) moveUnitTo(unit, rally.x, rally.y + Math.random() * 10 - 5, null);
+          const offset = unitStableOffset(unit, 5);
+          if (Math.hypot(unit.x - (rally.x + offset.x), unit.y - (rally.y + offset.y)) > 24) moveUnitTo(unit, rally.x + offset.x, rally.y + offset.y, null);
         }
       }
     }
@@ -2461,7 +2478,8 @@ function aiUpdate(dt) {
       if (type === "miner") retargetMinerUnit(unit);
       else {
         const rally = aiRallyPoint(ai) || { x: spawn.x, y: spawn.y };
-        moveUnitTo(unit, rally.x, rally.y + Math.random() * 12 - 6, null);
+        const offset = unitStableOffset(unit, 6);
+        moveUnitTo(unit, rally.x + offset.x, rally.y + offset.y, null);
       }
     }
     ai.unitTimer = ai.money < 600 ? 2.4 + Math.random() * 1.5 : 1.2 + Math.random() * 1.0;
@@ -2885,7 +2903,7 @@ function seedGame() {
   for (const spawn of state.currentMap.spawns.filter((s) => s.owner !== "player")) {
     const castle = spawnStructure("castle", spawn.owner, spawn.x, spawn.y);
     castle.id = `castle-${spawn.owner}`;
-    state.aiPlayers.push({ owner: spawn.owner, money: 1300, wood: 160, stone: 80, unitTimer: 2 + Math.random() * 2, buildTimer: 6 + Math.random() * 5, bridgeTimer: 0, attackBias: 0, formation: "normal", waveCounter: 0, currentWaveId: 0, waveChargeUntil: 0, waveChargeTargetId: null, waveAttackUntil: 0, waveAttackTargetId: null, perimeterPlan: createInitialAiPerimeterPlan(spawn) });
+    state.aiPlayers.push({ owner: spawn.owner, money: 1300, wood: 160, stone: 80, unitTimer: 2 + Math.random() * 2, buildTimer: 6 + Math.random() * 5, bridgeTimer: 0, attackBias: 0, formation: "normal", waveCounter: 0, currentWaveId: 0, waveChargeUntil: 0, waveChargeTargetId: null, waveAttackUntil: 0, waveAttackTargetId: null, focusOwner: null, focusUntil: 0, perimeterPlan: createInitialAiPerimeterPlan(spawn) });
     spawnStructure("tower", spawn.owner, spawn.x + (spawn.x > state.currentMap.width / 2 ? -22 : 22), spawn.y);
   }
   spawnUnit("soldier", "player", playerSpawn.x + 14, playerSpawn.y + 2);
