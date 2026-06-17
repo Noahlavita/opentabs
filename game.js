@@ -63,7 +63,7 @@ const unitTypes = {
 
 const structureTypes = {
   castle: { name: "Castello", cost: 0, hp: 900 * SCALE, w: 18, h: 24, range: 48, damage: 15, income: 0, pop: 0 },
-  tower: { name: "Torre", cost: 520, hp: 220 * SCALE, w: 8, h: 10, range: 42, damage: 18, income: 0, pop: 0, hotkey: "t" },
+  tower: { name: "Torre", cost: 620, hp: 220 * SCALE, w: 8, h: 10, range: 42, damage: 18, income: 0, pop: 0, hotkey: "t" },
   mine: { name: "Miniera", cost: 430, hp: 145 * SCALE, w: 12, h: 9, range: 0, damage: 0, income: 4.5 * SCALE, pop: 0, hotkey: "m" },
   barracks: { name: "Caserma", cost: 600, hp: 190 * SCALE, w: 14, h: 10, range: 0, damage: 0, income: 0, pop: 20 * SCALE, hotkey: "b" },
   cannon: { name: "Cannone", cost: 760, hp: 170 * SCALE, w: 10, h: 8, range: 0, damage: 0, income: 0, pop: 0, hotkey: "c" },
@@ -2286,12 +2286,16 @@ function aiWaveTargetPower(hostilePower, hostileArmy) {
   return Math.max(70, hostilePower * 1.16 + hostileArmy * 1.9);
 }
 
+function aiWaveChargeDuration(hostilePower, hostileArmy, reservePower) {
+  return clamp(4 + hostileArmy * 0.12 + hostilePower / 150 - reservePower / 320, 3.5, 11);
+}
+
 function aiActiveWaveUnits(units) {
-  return units.filter((unit) => Number.isFinite(unit.aiWaveSentAt) && state.gameTime - unit.aiWaveSentAt < 18);
+  return units.filter((unit) => Number.isFinite(unit.aiWaveSentAt));
 }
 
 function aiReserveUnits(units) {
-  return units.filter((unit) => !Number.isFinite(unit.aiWaveSentAt) || state.gameTime - unit.aiWaveSentAt >= 18);
+  return units.filter((unit) => !Number.isFinite(unit.aiWaveSentAt));
 }
 
 function aiLaunchWave(ai, units, preferredTarget) {
@@ -2351,8 +2355,16 @@ function aiUpdate(dt) {
     const waveTargetPower = aiWaveTargetPower(hostilePower, hostileArmy);
     const attackReady = !graceActive && aiCanAttack(ai, ownedArmy, preferredTarget, hostileArmy);
     const hasAdvantage = attackReady && armyPower >= Math.max(hostilePower * 1.08, 64);
-    const waveReady = hasAdvantage && reserveArmy.length > 0 && reservePower >= waveTargetPower;
-    aiSetCombatFormation(ai, armySize, hostileArmy, waveReady || activeWaveUnits.length > 0);
+    const shouldChargeWave = hasAdvantage && reserveArmy.length > 0 && reservePower >= waveTargetPower * 0.72;
+    if (!shouldChargeWave || !preferredTarget) {
+      ai.waveChargeUntil = 0;
+      ai.waveChargeTargetId = null;
+    } else if (!ai.waveChargeUntil) {
+      ai.waveChargeUntil = state.gameTime + aiWaveChargeDuration(hostilePower, hostileArmy, reservePower);
+      ai.waveChargeTargetId = preferredTarget.id;
+    }
+    const waveReady = Boolean(ai.waveChargeUntil) && state.gameTime >= ai.waveChargeUntil && hasAdvantage && reserveArmy.length > 0 && reservePower >= waveTargetPower;
+    aiSetCombatFormation(ai, armySize, hostileArmy, Boolean(ai.waveChargeUntil) || activeWaveUnits.length > 0);
     ai.bridgeTimer = Math.max(0, (ai.bridgeTimer || 0) - dt);
     if ((waveReady || activeWaveUnits.length > 0) && preferredTarget && ai.bridgeTimer <= 0 && aiTryBuildBridgeForAttack(ai, ownedArmy, preferredTarget)) ai.bridgeTimer = 10;
 
@@ -2375,7 +2387,11 @@ function aiUpdate(dt) {
           if (distanceToItemFromPoint(preferredTarget, unit) > unitTypes[unit.type].range + 8) moveUnitTo(unit, rectCenter(preferredTarget).x, rectCenter(preferredTarget).y, preferredTarget.id);
         }
       }
-      if (waveReady && preferredTarget) aiLaunchWave(ai, reserveArmy, preferredTarget);
+      if (waveReady && preferredTarget) {
+        aiLaunchWave(ai, reserveArmy, preferredTarget);
+        ai.waveChargeUntil = 0;
+        ai.waveChargeTargetId = null;
+      }
       const rally = aiRallyPoint(ai);
       if (rally) {
         for (const unit of reserveArmy) {
@@ -2813,7 +2829,7 @@ function seedGame() {
   for (const spawn of state.currentMap.spawns.filter((s) => s.owner !== "player")) {
     const castle = spawnStructure("castle", spawn.owner, spawn.x, spawn.y);
     castle.id = `castle-${spawn.owner}`;
-    state.aiPlayers.push({ owner: spawn.owner, money: 1300, wood: 160, stone: 80, unitTimer: 2 + Math.random() * 2, buildTimer: 6 + Math.random() * 5, bridgeTimer: 0, attackBias: 0, formation: "normal", waveCounter: 0, perimeterPlan: createInitialAiPerimeterPlan(spawn) });
+    state.aiPlayers.push({ owner: spawn.owner, money: 1300, wood: 160, stone: 80, unitTimer: 2 + Math.random() * 2, buildTimer: 6 + Math.random() * 5, bridgeTimer: 0, attackBias: 0, formation: "normal", waveCounter: 0, waveChargeUntil: 0, waveChargeTargetId: null, perimeterPlan: createInitialAiPerimeterPlan(spawn) });
     spawnStructure("tower", spawn.owner, spawn.x + (spawn.x > state.currentMap.width / 2 ? -22 : 22), spawn.y);
   }
   spawnUnit("soldier", "player", playerSpawn.x + 14, playerSpawn.y + 2);
