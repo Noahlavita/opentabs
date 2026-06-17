@@ -502,7 +502,7 @@ function structureStats(structure) {
   const base = structureTypes[structure.type];
   const level = structure.level || 1;
   return {
-    hpMax: Math.round(base.hp * level),
+    hpMax: structure.type === "castle" ? Math.round(base.hp * (1 + (level - 1) * 0.3)) : Math.round(base.hp * level),
     range: structure.type === "tower" ? Math.min(base.range + (level - 1) * 8, 80) : base.range,
     damage: base.damage * (1 + (level - 1) * 0.7),
     income: base.income * level,
@@ -1898,11 +1898,15 @@ function aiCanAttack(ai, ownedArmy, target, hostileArmy) {
   if (!target) return false;
   const armyPower = aiArmyPower(ownedArmy);
   const hostilePower = aiArmyPower(state.units.filter((u) => u.owner !== ai.owner && u.type !== "miner"));
-  // Only count structures that actually shoot (towers, castles) - walls don't matter
-  const towerCount = state.structures.filter((s) => s.owner !== ai.owner && s.type === "tower").length;
-  const castleCount = state.structures.filter((s) => s.owner !== ai.owner && s.type === "castle").length;
-  const defensePenalty = towerCount * 35 + castleCount * 25;
-  const requiredPower = Math.max(50, hostilePower * 0.55 + defensePenalty);
+  const hostileMilitaryStructures = state.structures.filter((s) => s.owner !== ai.owner && ["tower", "castle", "cannon", "barracks", "fabbro"].includes(s.type));
+  const structurePressure = hostileMilitaryStructures.reduce((sum, structure) => {
+    const level = structure.level || 1;
+    const hpFactor = 0.35 + structureHpPercent(structure);
+    const weight = structure.type === "tower" ? 52 : structure.type === "castle" ? 34 : structure.type === "cannon" ? 28 : structure.type === "barracks" ? 18 : 16;
+    return sum + weight * level * hpFactor;
+  }, 0);
+  const defensePenalty = aiDefensePowerAgainst(ai, target) * 0.06 + structurePressure;
+  const requiredPower = Math.max(60, hostilePower * 0.68 + defensePenalty);
   return armyPower >= requiredPower;
 }
 
@@ -2183,6 +2187,8 @@ function aiChooseBuildType(ai) {
   const towers = state.structures.filter((s) => s.owner === ai.owner && s.type === "tower").length;
   const barracks = state.structures.filter((s) => s.owner === ai.owner && s.type === "barracks").length;
   const cannons = state.structures.filter((s) => s.owner === ai.owner && s.type === "cannon").length;
+  const fabbros = state.structures.filter((s) => s.owner === ai.owner && s.type === "fabbro").length;
+  const enemyMilitaryStructures = state.structures.filter((s) => s.owner !== ai.owner && ["tower", "castle", "cannon", "barracks", "fabbro"].includes(s.type)).length;
   const threat = aiThreatScore(ai, aiBase(ai)?.center || { x: 0, y: 0 }, 115);
   const mineTarget = Math.min(state.currentMap.rocks.length, Math.max(2, (ai.castleLevel || 1) + 1));
   const enemyHasCannon = state.structures.some((s) => s.owner !== ai.owner && s.type === "cannon");
@@ -2190,12 +2196,14 @@ function aiChooseBuildType(ai) {
   if (mines < mineTarget && ai.money >= structureTypes.mine.cost) return "mine";
   if ((threat > 22 || towers < 2) && ai.money >= structureTypes.tower.cost) return "tower";
   if (barracks < 2 && ai.money >= structureTypes.barracks.cost) return "barracks";
+  if (!fabbros && (barracks + cannons + towers >= 3 || enemyMilitaryStructures >= 4) && ai.money >= structureTypes.fabbro.cost && (ai.stone || 0) >= (structureTypes.fabbro.costStone || 0)) return "fabbro";
   if (aiHasThingsToDefend(ai) && aiArtilleryRisk(ai) >= 2 && aiPerimeterWallPlan(ai) && ai.money >= structureTypes.wall.cost) return "wall";
   if ((cannons < 1 || (mines >= 3 && cannons < 2)) && ai.money >= structureTypes.cannon.cost) return "cannon";
+  if (fabbros < 2 && barracks + cannons >= 3 && ai.money >= structureTypes.fabbro.cost * 1.1 && (ai.stone || 0) >= (structureTypes.fabbro.costStone || 0)) return "fabbro";
   if (towers < 5 && ai.money >= structureTypes.tower.cost) return "tower";
   if (mines < mineTarget + 1 && ai.money >= structureTypes.mine.cost) return "mine";
   if (ai.money >= 4200 && aiPerimeterWallPlan(ai) && ai.money >= structureTypes.wall.cost) return "wall";
-  return ["barracks", "cannon", "tower", "mine"].find((type) => ai.money >= structureTypes[type].cost) || null;
+  return ["barracks", "cannon", "tower", "mine", "fabbro"].find((type) => ai.money >= structureTypes[type].cost && (type !== "fabbro" || (ai.stone || 0) >= (structureTypes.fabbro.costStone || 0))) || null;
 }
 
 function aiTryBuild(ai) {
@@ -2534,7 +2542,7 @@ function updateUI() {
   if (ui.minerLimit) ui.minerLimit.textContent = `Minatori ${currentMinerPop("player")}/${minerCap()}`;
   if (ui.mineLimit) ui.mineLimit.textContent = `Miniere ${currentMineCount("player")}/${mineCap()}`;
   const castle = state.structures.find((s) => s.id === "castle-player");
-  ui.castleHp.textContent = castle ? `${Math.max(0, Math.round(structureHpPercent(castle) * 100))}%` : "0%";
+  ui.castleHp.textContent = castle ? `${Math.max(0, Math.ceil(castle.hp))}/${castle.maxHp}` : "0/0";
   ui.cameraInfo.textContent = `Zoom ${state.camera.zoom.toFixed(2)}x - X ${Math.round(state.camera.x)} Y ${Math.round(state.camera.y)}`;
   if (ui.speedButton) ui.speedButton.textContent = `Velocità ${String(state.gameSpeed).replace(".", ",")}x`;
   updateCostLabels();
