@@ -159,12 +159,15 @@ function currentMinerPop(owner = "player") { return state.units.filter((u) => u.
 function currentMineCount(owner = "player") { return state.structures.filter((s) => s.owner === owner && s.type === "mine").reduce((sum, structure) => sum + (structure.level || 1), 0); }
 function castleUpgradeCost() { return Math.floor(1000 * Math.pow(1.7, state.castleLevel - 1)); }
 function playerCannons() { return state.structures.filter((s) => s.owner === "player" && s.type === "cannon"); }
+function cannonArtilleryCapacity(structure) {
+  return Math.max(1, structure?.level || 1);
+}
 function cannonArtilleryCooldown(structure) {
   const level = structure?.level || 1;
   return Math.max(CANNON_ARTILLERY_COOLDOWN_MIN, CANNON_ARTILLERY_COOLDOWN_BASE - (level - 1) * CANNON_ARTILLERY_COOLDOWN_STEP);
 }
 function bestReadyArtilleryCannon(owner, targetPoint) {
-  const readyCannons = state.structures.filter((s) => s.owner === owner && s.type === "cannon" && s.cooldown <= 0);
+  const readyCannons = state.structures.filter((s) => s.owner === owner && s.type === "cannon" && (s.cannonAmmo || 0) > 0);
   if (!readyCannons.length) return null;
   return readyCannons
     .map((entry) => ({ entry, d: Math.hypot(rectCenter(entry).x - targetPoint.x, rectCenter(entry).y - targetPoint.y) }))
@@ -173,12 +176,15 @@ function bestReadyArtilleryCannon(owner, targetPoint) {
 function shortestArtilleryCooldown(owner) {
   return state.structures
     .filter((s) => s.owner === owner && s.type === "cannon")
-    .reduce((best, cannon) => Math.min(best, Math.max(0, cannon.cooldown || 0)), Infinity);
+    .reduce((best, cannon) => Math.min(best, Math.max(0, cannon.cannonReload || 0)), Infinity);
 }
 function cannonCooldownPercent(structure) {
+  const capacity = cannonArtilleryCapacity(structure);
+  const ammo = Math.max(0, structure.cannonAmmo || 0);
+  if (ammo >= capacity) return 0;
   const total = cannonArtilleryCooldown(structure);
   if (total <= 0) return 0;
-  return clamp(Math.max(0, structure.cooldown || 0) / total, 0, 1);
+  return clamp(Math.max(0, structure.cannonReload || 0) / total, 0, 1);
 }
 function artilleryFlightProgress(projectile) {
   const flightTime = projectile.artillery ? (projectile.flightTime || ARTILLERY_PROJECTILE_SPEED) : (1 / 4.5);
@@ -546,6 +552,10 @@ function spawnStructure(type, owner, x, y) {
   const stats = structureStats(structure);
   structure.hp = stats.hpMax;
   structure.maxHp = stats.hpMax;
+  if (type === "cannon") {
+    structure.cannonAmmo = cannonArtilleryCapacity(structure);
+    structure.cannonReload = 0;
+  }
   state.structures.push(structure);
   if (owner === "player" && type === "barracks") state.popCap += stats.pop;
   return structure;
@@ -1317,6 +1327,10 @@ function upgradeStructure(structure) {
   const after = structureStats(structure);
   structure.maxHp = after.hpMax;
   structure.hp = after.hpMax;
+  if (structure.type === "cannon") {
+    structure.cannonAmmo = cannonArtilleryCapacity(structure);
+    structure.cannonReload = 0;
+  }
   if (structure.owner === "player" && structure.type === "barracks") state.popCap += after.pop - before.pop;
   if (structure.type === "wall") recalculateWallSegmentsForColumn(structure);
 }
@@ -1413,7 +1427,10 @@ function fireArtillery(type, targetPoint) {
     projectile.blockedByWallId = wallHit.id;
   }
   state.projectiles.push(projectile);
-  cannon.cooldown = cannonArtilleryCooldown(cannon);
+  cannon.cannonAmmo = Math.max(0, (cannon.cannonAmmo || 0) - 1);
+  if ((cannon.cannonAmmo || 0) < cannonArtilleryCapacity(cannon) && (cannon.cannonReload || 0) <= 0) {
+    cannon.cannonReload = cannonArtilleryCooldown(cannon);
+  }
   state.selectedArtillery = null;
 }
 
@@ -1784,6 +1801,13 @@ function updateUnits(dt) {
 function updateStructures(dt) {
   for (const structure of state.structures) {
     structure.cooldown = Math.max(0, (structure.cooldown || 0) - dt);
+    if (structure.type === "cannon" && (structure.cannonAmmo || 0) < cannonArtilleryCapacity(structure)) {
+      structure.cannonReload = Math.max(0, (structure.cannonReload || 0) - dt);
+      while ((structure.cannonAmmo || 0) < cannonArtilleryCapacity(structure) && (structure.cannonReload || 0) <= 0) {
+        structure.cannonAmmo = Math.min(cannonArtilleryCapacity(structure), (structure.cannonAmmo || 0) + 1);
+        if ((structure.cannonAmmo || 0) < cannonArtilleryCapacity(structure)) structure.cannonReload += cannonArtilleryCooldown(structure);
+      }
+    }
     const stats = structureStats(structure);
     if (structure.type === "mine") {
       const gain = stats.income * dt;
@@ -2469,7 +2493,10 @@ function aiUpdate(dt) {
         if (cannon) {
           ai.money -= artilleryTypes[shellType].cost;
           state.projectiles.push(createArtilleryProjectile(cannon, shellType, t));
-          cannon.cooldown = cannonArtilleryCooldown(cannon);
+          cannon.cannonAmmo = Math.max(0, (cannon.cannonAmmo || 0) - 1);
+          if ((cannon.cannonAmmo || 0) < cannonArtilleryCapacity(cannon) && (cannon.cannonReload || 0) <= 0) {
+            cannon.cannonReload = cannonArtilleryCooldown(cannon);
+          }
           ai.shellTimer = 8 + Math.random() * 5;
         }
       }
@@ -2589,7 +2616,7 @@ function updateUI() {
         : selected.type === "bridge"
           ? `Ancora ponte senza HP - collegamenti ${bridgeConnectionCount(selected)}/2`
           : selected.type === "cannon"
-            ? `HP ${Math.max(0, Math.ceil(selected.hp))}/${selected.maxHp} - Ricarica ${Math.max(0, selected.cooldown || 0).toFixed(1)}s/${cannonArtilleryCooldown(selected).toFixed(1)}s`
+            ? `HP ${Math.max(0, Math.ceil(selected.hp))}/${selected.maxHp} - Colpi ${selected.cannonAmmo || 0}/${cannonArtilleryCapacity(selected)} - Ricarica ${Math.max(0, selected.cannonReload || 0).toFixed(1)}s`
             : `HP ${Math.max(0, Math.ceil(selected.hp))}/${selected.maxHp} - Danno ${stats.damage.toFixed(0)} - Range ${stats.range.toFixed(0)} - Entrate ${stats.income.toFixed(1)}`;
     }
   }
