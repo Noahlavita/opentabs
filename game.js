@@ -427,6 +427,102 @@ function nearestUsableBridgePoint(from, to, owner = null) {
   return best;
 }
 
+function bridgeRouteForPath(from, to, owner = null) {
+  const legacyRoute = () => {
+    const fallback = nearestUsableBridgePoint(from, to, owner);
+    if (!fallback) return null;
+    return {
+      waypoints: [
+        { x: fallback.entry.x, y: fallback.entry.y, bridgeId: null },
+        { x: fallback.exit.x, y: fallback.exit.y, bridgeId: fallback.bridgeId || null },
+        { x: to.x, y: to.y, bridgeId: null }
+      ]
+    };
+  };
+  const bridges = state.structures.filter((s) => s.type === "bridgeSegment");
+  if (!bridges.length) return null;
+  const nodes = [];
+  for (const bridge of bridges) {
+    const a = { x: bridge.x1, y: bridge.y1 };
+    const b = { x: bridge.x2, y: bridge.y2 };
+    if (!bridgePathTouchesWater(a, b) || isInsideWater(a.x, a.y) || isInsideWater(b.x, b.y)) continue;
+    const aIndex = nodes.length;
+    nodes.push({ x: a.x, y: a.y, bridgeId: bridge.id, mate: aIndex + 1 });
+    nodes.push({ x: b.x, y: b.y, bridgeId: bridge.id, mate: aIndex });
+  }
+  if (!nodes.length) return null;
+  const adjacency = new Map();
+  const addEdge = (fromIndex, toIndex, cost) => {
+    if (!adjacency.has(fromIndex)) adjacency.set(fromIndex, []);
+    adjacency.get(fromIndex).push({ to: toIndex, cost });
+  };
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    const mate = nodes[node.mate];
+    addEdge(i, node.mate, Math.hypot(node.x - mate.x, node.y - mate.y) * 0.8);
+    for (let j = i + 1; j < nodes.length; j++) {
+      const other = nodes[j];
+      if (node.bridgeId === other.bridgeId) continue;
+      if (lineCrossesWater(node, other)) continue;
+      const cost = Math.hypot(node.x - other.x, node.y - other.y);
+      addEdge(i, j, cost);
+      addEdge(j, i, cost);
+    }
+  }
+  const startLinks = nodes
+    .map((node, index) => ({ index, cost: Math.hypot(from.x - node.x, from.y - node.y) }))
+    .filter((entry) => !lineCrossesWater(from, nodes[entry.index]));
+  const endLinks = new Map(nodes
+    .map((node, index) => ({ index, cost: Math.hypot(node.x - to.x, node.y - to.y) }))
+    .filter((entry) => !lineCrossesWater(nodes[entry.index], to))
+    .map((entry) => [entry.index, entry.cost]));
+  if (!startLinks.length || !endLinks.size) return legacyRoute();
+  const dist = new Array(nodes.length).fill(Infinity);
+  const prev = new Array(nodes.length).fill(-1);
+  const visited = new Array(nodes.length).fill(false);
+  for (const link of startLinks) dist[link.index] = link.cost;
+  let bestEnd = -1;
+  let bestScore = Infinity;
+  for (;;) {
+    let current = -1;
+    let currentDist = Infinity;
+    for (let i = 0; i < nodes.length; i++) {
+      if (!visited[i] && dist[i] < currentDist) { currentDist = dist[i]; current = i; }
+    }
+    if (current === -1) break;
+    visited[current] = true;
+    if (endLinks.has(current)) {
+      const total = currentDist + endLinks.get(current) * 0.65;
+      if (total < bestScore) { bestScore = total; bestEnd = current; }
+    }
+    for (const edge of adjacency.get(current) || []) {
+      const nextDist = currentDist + edge.cost;
+      if (nextDist < dist[edge.to]) {
+        dist[edge.to] = nextDist;
+        prev[edge.to] = current;
+      }
+    }
+  }
+  if (bestEnd === -1) return legacyRoute();
+  const path = [];
+  for (let at = bestEnd; at !== -1; at = prev[at]) path.push(at);
+  path.reverse();
+  const waypoints = [];
+  for (const nodeIndex of path) {
+    const node = nodes[nodeIndex];
+    const previousNode = waypoints[waypoints.length - 1];
+    if (!previousNode || Math.hypot(previousNode.x - node.x, previousNode.y - node.y) > 1) {
+      waypoints.push({ x: node.x, y: node.y, bridgeId: null });
+    }
+    const mate = nodes[node.mate];
+    if (!waypoints.length || waypoints[waypoints.length - 1].x !== mate.x || waypoints[waypoints.length - 1].y !== mate.y) {
+      waypoints.push({ x: mate.x, y: mate.y, bridgeId: node.bridgeId });
+    }
+  }
+  waypoints.push({ x: to.x, y: to.y, bridgeId: null });
+  return { waypoints };
+}
+
 function bridgeSegmentCoversWater(water, bridge) {
   if (!bridge || bridge.type !== "bridgeSegment") return false;
   const center = { x: (bridge.x1 + bridge.x2) / 2, y: (bridge.y1 + bridge.y2) / 2 };
@@ -658,6 +754,8 @@ function clearUnitPath(unit) {
   unit.pathExitY = null;
   unit.pathBridgeId = null;
   unit.pathStage = null;
+  unit.pathWaypoints = null;
+  unit.pathWaypointIndex = 0;
   unit.navFrame = -1;
 }
 
@@ -699,6 +797,19 @@ function unitNavigationTarget(unit, finalTarget) {
   if (unit.navFrame === PERF.frameIndex && Math.hypot((unit.navFinalX ?? Infinity) - direct.x, (unit.navFinalY ?? Infinity) - direct.y) < 0.5) {
     return { x: unit.navX, y: unit.navY };
   }
+  if (Array.isArray(unit.pathWaypoints) && unit.pathWaypoints.length) {
+    while (unit.pathWaypointIndex < unit.pathWaypoints.length) {
+      const waypoint = unit.pathWaypoints[unit.pathWaypointIndex];
+      const distToWaypoint = Math.hypot(unit.x - waypoint.x, unit.y - waypoint.y);
+      unit.pathBridgeId = waypoint.bridgeId || null;
+      if (distToWaypoint > 6 || (waypoint.bridgeId && isInsideWater(unit.x, unit.y) && isNearBridge(unit.x, unit.y, 6))) {
+        return rememberUnitNavigation(unit, direct, waypoint);
+      }
+      unit.pathWaypointIndex += 1;
+    }
+    clearUnitPath(unit);
+    return rememberUnitNavigation(unit, direct, direct);
+  }
   if (unit.pathStage === "entry" && unit.pathTargetX !== null && unit.pathTargetY !== null) {
     const entry = { x: unit.pathTargetX, y: unit.pathTargetY };
     const distToEntry = Math.hypot(unit.x - entry.x, unit.y - entry.y);
@@ -730,25 +841,12 @@ function unitNavigationTarget(unit, finalTarget) {
     clearUnitPath(unit);
   }
   if (!lineCrossesWater({ x: unit.x, y: unit.y }, direct)) return rememberUnitNavigation(unit, direct, direct);
-  const route = nearestUsableBridgePoint({ x: unit.x, y: unit.y }, direct, unit.owner);
+  const route = bridgeRouteForPath({ x: unit.x, y: unit.y }, direct, unit.owner);
   if (!route) return rememberUnitNavigation(unit, direct, direct);
-  const bridgeDx = route.exit.x - route.entry.x;
-  const bridgeDy = route.exit.y - route.entry.y;
-  const bridgeLen = Math.hypot(bridgeDx, bridgeDy) || 1;
-  const exitClearance = 9;
-  const clearedExit = {
-    x: clamp(route.exit.x + (bridgeDx / bridgeLen) * exitClearance, 3, mapWidth() - 3),
-    y: clamp(route.exit.y + (bridgeDy / bridgeLen) * exitClearance, 3, mapHeight() - 3)
-  };
-  unit.pathTargetX = route.entry.x;
-  unit.pathTargetY = route.entry.y;
-  unit.pathMidX = route.mid?.x ?? null;
-  unit.pathMidY = route.mid?.y ?? null;
-  unit.pathExitX = route.mid ? route.exit.x : (canTraverse(clearedExit.x, clearedExit.y) ? clearedExit.x : route.exit.x);
-  unit.pathExitY = route.mid ? route.exit.y : (canTraverse(clearedExit.x, clearedExit.y) ? clearedExit.y : route.exit.y);
-  unit.pathBridgeId = route.bridgeId || null;
-  unit.pathStage = "entry";
-  return rememberUnitNavigation(unit, direct, route.entry);
+  unit.pathWaypoints = route.waypoints;
+  unit.pathWaypointIndex = 0;
+  unit.pathBridgeId = route.waypoints[0]?.bridgeId || null;
+  return rememberUnitNavigation(unit, direct, route.waypoints[0]);
 }
 
 function retargetMinerUnit(unit) {
@@ -943,20 +1041,27 @@ function nearestWaterToSegment(from, to) {
 }
 
 function bridgeAutoPlan(x, y, owner = "player") {
-  const water = waterAtPoint(x, y, 18);
+  const water = waterAtPoint(x, y, 26) || state.currentMap.waters
+    .map((entry) => ({ water: entry, d: Math.hypot(x - entry.x, y - entry.y) - entry.r }))
+    .filter((entry) => entry.d <= 18)
+    .sort((a, b) => a.d - b.d)[0]?.water || null;
   if (!water) return null;
   const hoverDx = x - water.x;
   const hoverDy = y - water.y;
   const hoverLen = Math.hypot(hoverDx, hoverDy) || 1;
   const radial = { x: hoverDx / hoverLen, y: hoverDy / hoverLen };
   const preferredAxis = Math.abs(radial.x) >= Math.abs(radial.y) ? { x: 1, y: 0 } : { x: 0, y: 1 };
-  const axes = [preferredAxis, { x: radial.x, y: radial.y }, Math.abs(radial.x) >= Math.abs(radial.y) ? { x: 0, y: 1 } : { x: 1, y: 0 }];
+  const perpendicular = Math.abs(radial.x) >= Math.abs(radial.y) ? { x: 0, y: 1 } : { x: 1, y: 0 };
+  const diagonalA = { x: Math.sign(radial.x || 1), y: Math.sign(radial.y || 1) };
+  const diagonalB = { x: diagonalA.x, y: -diagonalA.y };
+  const axes = [preferredAxis, { x: radial.x, y: radial.y }, perpendicular, diagonalA, diagonalB];
   const shoreInset = 7;
   const shoreOutset = 9;
   const spec = structureTypes.bridge;
   for (const axis of axes) {
-    const ux = axis.x;
-    const uy = axis.y;
+    const axisLen = Math.hypot(axis.x, axis.y) || 1;
+    const ux = axis.x / axisLen;
+    const uy = axis.y / axisLen;
     const from = { x: Math.round(water.x - ux * (water.r + shoreOutset)), y: Math.round(water.y - uy * (water.r + shoreOutset)) };
     const to = { x: Math.round(water.x + ux * (water.r + shoreOutset)), y: Math.round(water.y + uy * (water.r + shoreOutset)) };
     const center = { x: Math.round((from.x + to.x) / 2), y: Math.round((from.y + to.y) / 2) };
@@ -1760,12 +1865,13 @@ function updateUnits(dt) {
         const anchorDy = navAnchor.y - unit.y;
         const anchorDist = Math.hypot(anchorDx, anchorDy);
         if (anchorDist > 0.4) { unit.facingX = anchorDx / anchorDist; unit.facingY = anchorDy / anchorDist; }
-        const bridgeMove = unit.pathStage === "entry" || unit.pathStage === "mid" || unit.pathStage === "crossing";
-        const bridgeFormation = bridgeMove && unit.pathStage !== "entry";
+        const waypointBridgeMove = Array.isArray(unit.pathWaypoints) && unit.pathWaypointIndex < unit.pathWaypoints.length;
+        const bridgeMove = waypointBridgeMove || unit.pathStage === "entry" || unit.pathStage === "mid" || unit.pathStage === "crossing";
+        const bridgeFormation = waypointBridgeMove ? Boolean(unit.pathBridgeId) : bridgeMove && unit.pathStage !== "entry";
         const bridgeSegment = bridgeFormation ? bridgeSegmentById(unit.pathBridgeId) : null;
         const offset = bridgeSegment ? bridgeFormationWorldOffset(unit, member, bridgeSegment) : formationWorldOffset(unit, member, navAnchor);
         const unitAtAnchor = Math.hypot(unit.x - navAnchor.x, unit.y - navAnchor.y) <= 0.7;
-        const idleAtTarget = !target && !unit.pathStage && unitAtAnchor;
+        const idleAtTarget = !target && !unit.pathStage && !waypointBridgeMove && unitAtAnchor;
         const desiredAnchor = idleAtTarget ? { x: unit.targetX, y: unit.targetY } : navAnchor;
         let desired = { x: clamp(desiredAnchor.x + offset.x, 3, mapWidth() - 3), y: clamp(desiredAnchor.y + offset.y, 3, mapHeight() - 3) };
         if (bridgeSegment) {
@@ -1958,7 +2064,13 @@ function aiTryBuildBridgeForAttack(ai, ownedArmy, target) {
     .sort((a, b) => a.d - b.d)[0]?.unit;
   if (!unit) return false;
   const plan = bridgePlanForPath({ x: unit.x, y: unit.y }, targetPoint, ai.owner);
-  if (!plan) return false;
+  if (!plan) {
+    const water = nearestWaterToSegment({ x: unit.x, y: unit.y }, targetPoint);
+    if (!water || state.structures.some((structure) => bridgeSegmentCoversWater(water, structure))) return false;
+    const fallbackPlan = bridgeAutoPlan(water.x, water.y, ai.owner);
+    if (!fallbackPlan) return false;
+    return placeStructure("bridge", fallbackPlan.center.x, fallbackPlan.center.y, ai.owner, { bridgePlan: fallbackPlan });
+  }
   return placeStructure("bridge", plan.center.x, plan.center.y, ai.owner, { bridgePlan: plan });
 }
 
@@ -2244,9 +2356,12 @@ function aiTryBuild(ai) {
   const type = aiChooseBuildType(ai);
   if (!type) return false;
   const candidates = aiBuildCandidates(ai, type);
-  const chosen = candidates[0];
-  if (!chosen) return false;
-  return placeStructure(type, chosen.x, chosen.y, ai.owner, { aiPerimeterIndex: chosen.aiPerimeterIndex, aiPerimeterTotal: chosen.aiPerimeterTotal });
+  for (const chosen of candidates) {
+    if (!chosen) continue;
+    if (type === "cannon" && overlappingOwnedStructure(type, chosen.x, chosen.y, ai.owner)) continue;
+    if (placeStructure(type, chosen.x, chosen.y, ai.owner, { aiPerimeterIndex: chosen.aiPerimeterIndex, aiPerimeterTotal: chosen.aiPerimeterTotal })) return true;
+  }
+  return false;
 }
 
 function aiRallyPoint(ai) {
