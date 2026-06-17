@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Castelli Pixel Swarm - Scegli mappa</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="shell page-shell narrow-shell">
+      <header class="page-header">
+        <div>
+          <h1>Scegli mappa</h1>
+          <p>Seleziona una mappa e avvia la partita.</p>
+        </div>
+        <nav class="page-nav">
+          <a class="nav-link" href="index.html">Indietro</a>
+        </nav>
+      </header>
+
+      <section class="panel map-select-panel">
+        <div class="panel-section">
+          <h2>Mappe disponibili</h2>
+          <div id="mapList" class="map-list"></div>
+        </div>
+        <div class="panel-section">
+          <button id="startSelectedMap" class="command primary" type="button">
+            <span class="icon">▶</span>
+            <span>
+              <strong>Gioca mappa selezionata</strong>
+              <small>Apri la partita a schermo pieno</small>
+            </span>
+          </button>
+          <label class="import-button command" for="mapImport">
+            <span class="icon">⇪</span>
+            <span>
+              <strong>Importa mappa</strong>
+              <small>Carica file `.json`</small>
+            </span>
+          </label>
+          <input id="mapImport" type="file" accept="application/json" hidden>
+        </div>
+      </section>
+    </main>
+
+    <script src="maps.js"></script>
+  </body>
+</html>

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Castelli Pixel Swarm - Partita</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body class="play-body">
+    <main class="play-shell">
+      <section class="play-stage">
+        <section class="board-wrap fullscreen-board">
+          <canvas id="game" width="1280" height="720" aria-label="Mappa di gioco"></canvas>
+          <div id="toast" class="toast" aria-live="polite"></div>
+        </section>
+
+        <section class="bottom-hud" aria-label="Interfaccia di gioco">
+          <div class="hud-topbar" aria-label="Risorse">
+            <div class="hud-brand">Castelli Pixel Swarm</div>
+            <div class="hud-resource income"><span>Entrate</span><strong id="income">0/s</strong></div>
+            <div class="hud-resource population"><span>Pop</span><strong id="population">0/0</strong></div>
+            <div class="hud-resource hp"><span>Castello</span><strong id="castleHp">0%</strong></div>
+            <div class="hud-resource gold"><span>Oro</span><strong id="money">0</strong></div>
+            <div class="hud-resource wood-res"><span>Legno</span><strong id="wood">0</strong></div>
+            <div class="hud-resource stone-res"><span>Pietra</span><strong id="stone">0</strong></div>
+          </div>
+
+          <div class="hud-grid">
+            <div class="hud-block hud-status-panel hud-status-panel-wide">
+              <div class="hud-label">Stato</div>
+              <div class="hud-status-stack">
+                <div class="hud-status-card">
+                  <span class="hud-meta-label">Selezione</span>
+                  <strong id="selectionName">Nessuna</strong>
+                  <small id="selectionStats"></small>
+                </div>
+                <div class="hud-status-row">
+                  <div class="hud-chip" id="minerLimit">Minatori 0/0</div>
+                  <div class="hud-chip" id="mineLimit">Miniere 0/0</div>
+                  <div class="hud-chip" id="cameraInfo">Zoom 1.00x</div>
+                  <button id="speedButton" class="hud-chip hud-speed-button" type="button">Velocità 1x</button>
+                  <button id="formationBtn" class="hud-chip hud-speed-button" type="button">Formazione: Normale</button>
+                </div>
+                <div class="hud-help">Mouse wheel = zoom, Shift+drag o click centrale = muovi, Q = formazione</div>
+              </div>
+            </div>
+
+            <div class="hud-block hud-toolbar-block">
+              <div class="hud-label">Unità</div>
+              <div class="hud-toolbar">
+                <button id="buySoldier" class="command hud-tool" type="button"><span class="icon">1</span><span><strong>Soldati</strong><small id="costSoldier" class="hud-tooltip-text">0 oro, 10 pop</small></span></button>
+                <button id="buyArcher" class="command hud-tool" type="button"><span class="icon">2</span><span><strong>Arcieri</strong><small id="costArcher" class="hud-tooltip-text">0 oro, 10 pop</small></span></button>
+                <button id="buyMiner" class="command hud-tool" type="button"><span class="icon">3</span><span><strong>Minatori</strong><small id="costMiner" class="hud-tooltip-text">0 oro, 10 pop</small></span></button>
+                <button id="buyTank" class="command hud-tool" type="button"><span class="icon">7</span><span><strong>Tankoni</strong><small id="costTank" class="hud-tooltip-text">0 oro, 10 pop</small></span></button>
+              </div>
+              <div class="hud-label">Artiglieria</div>
+              <div class="hud-toolbar">
+                <button id="buyShell" class="command hud-tool" type="button"><span class="icon">4</span><span><strong>Standard</strong><small id="costShell" class="hud-tooltip-text">Munizione area base</small></span></button>
+                <button id="buyHeavyShell" class="command hud-tool" type="button"><span class="icon">5</span><span><strong>Pesante</strong><small id="costHeavyShell" class="hud-tooltip-text">Più costo, più area</small></span></button>
+              </div>
+              <div class="hud-label">Strutture</div>
+              <div class="hud-toolbar">
+                <button id="buildTower" class="command hud-tool" type="button"><span class="icon">T</span><span><strong>Torre</strong><small id="costTower" class="hud-tooltip-text">0 oro</small></span></button>
+                <button id="buildMine" class="command hud-tool" type="button"><span class="icon">M</span><span><strong>Miniera</strong><small id="costMine" class="hud-tooltip-text">0 oro</small></span></button>
+                <button id="buildBarracks" class="command hud-tool" type="button"><span class="icon">B</span><span><strong>Caserma</strong><small id="costBarracks" class="hud-tooltip-text">0 oro</small></span></button>
+                <button id="buildCannon" class="command hud-tool" type="button"><span class="icon">C</span><span><strong>Cannone</strong><small id="costCannon" class="hud-tooltip-text">0 oro</small></span></button>
+                <button id="buildWall" class="command hud-tool" type="button"><span class="icon">V</span><span><strong>Muro</strong><small id="costWall" class="hud-tooltip-text">0 oro</small></span></button>
+                <button id="buildBridge" class="command hud-tool" type="button"><span class="icon">G</span><span><strong>Ponte</strong><small id="costBridge" class="hud-tooltip-text">0 oro + legno</small></span></button>
+                <button id="buildFabbro" class="command hud-tool" type="button"><span class="icon">F</span><span><strong>Fabbro</strong><small id="costFabbro" class="hud-tooltip-text">0 oro + pietra</small></span></button>
+                <button id="upgradeCastle" class="command hud-tool emphasis" type="button"><span class="icon">U</span><span><strong>Upgrade</strong><small id="castleUpgradeCost" class="hud-tooltip-text">0 oro</small></span></button>
+              </div>
+            </div>
+
+            <div class="hud-block hud-exit-block">
+              <a class="command hud-command hud-exit" href="maps.html"><span class="icon">←</span><span><strong>Mappe</strong><small>Esci dalla partita</small></span></a>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="game.js"></script>
+  </body>
+</html>

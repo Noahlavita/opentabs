@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Castelli Pixel Swarm - Editor</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="shell page-shell">
+      <header class="page-header">
+        <div>
+          <h1>Editor Mappe</h1>
+          <p>Crea mappe a pennello, assegna nome, salva, scarica o importa.</p>
+        </div>
+        <nav class="page-nav">
+          <a class="nav-link" href="index.html">Home</a>
+          <a class="nav-link active" href="editor.html">Editor</a>
+        </nav>
+      </header>
+
+      <section class="topbar" aria-label="Editor mappa">
+        <div class="brand">Editor Mappe</div>
+        <label class="resource resource-field"><span>Nome mappa</span><input id="mapName" class="text-field" type="text" value="Nuova Mappa"></label>
+        <label class="resource resource-field"><span>Dimensione</span><select id="editorMapSize"><option value="small">Piccola</option><option value="medium">Media</option><option value="large">Grande</option><option value="huge">Enorme</option><option value="gigantic">Gigantesca</option></select></label>
+        <label class="resource resource-field"><span>Strumento</span><select id="editorTool"><option value="grass">Terra</option><option value="water">Acqua</option><option value="rock">Pietra</option><option value="erase">Gomma</option><option value="spawn-player">Spawn giocatore</option><option value="spawn-enemy-1">Spawn blu</option><option value="spawn-enemy-2">Spawn viola</option><option value="spawn-enemy-3">Spawn verde</option><option value="spawn-enemy-4">Spawn arancio</option></select></label>
+        <label class="resource resource-field"><span>Dimensione pennello</span><input id="brushSize" type="range" min="2" max="18" value="6"></label>
+      </section>
+
+      <section class="game-layout editor-layout">
+        <aside class="panel">
+          <div class="panel-section status">
+            <h2>Azioni</h2>
+            <button id="saveMap" class="command" type="button"><span class="icon">💾</span><span><strong>Salva mappa</strong><small>Memorizza nella libreria locale</small></span></button>
+            <button id="downloadMap" class="command" type="button"><span class="icon">↓</span><span><strong>Scarica mappa</strong><small>Esporta file JSON</small></span></button>
+            <button id="playFromEditor" class="command primary" type="button"><span class="icon">▶</span><span><strong>Gioca questa mappa</strong><small>Apri la partita a schermo pieno</small></span></button>
+            <label class="import-button command" for="mapImport"><span class="icon">↑</span><span><strong>Importa mappa</strong><small>Carica file JSON</small></span></label>
+            <input id="mapImport" type="file" accept="application/json" hidden>
+          </div>
+          <div class="panel-section status">
+            <h2>Info</h2>
+            <div id="editorCameraInfo">Zoom 1.00x</div>
+            <div id="editorInfo">Disegna a pennello su una mappa inizialmente tutta erba.</div>
+          </div>
+        </aside>
+        <section class="board-wrap editor-board-wrap">
+          <canvas id="editorGame" width="960" height="540" aria-label="Editor mappa"></canvas>
+          <div id="editorToast" class="toast" aria-live="polite"></div>
+        </section>
+      </section>
+    </main>
+
+    <script src="editor.js"></script>
+  </body>
+</html>
