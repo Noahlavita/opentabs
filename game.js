@@ -2290,17 +2290,24 @@ function aiWaveChargeDuration(hostilePower, hostileArmy, reservePower) {
   return clamp(4 + hostileArmy * 0.12 + hostilePower / 150 - reservePower / 320, 3.5, 11);
 }
 
-function aiActiveWaveUnits(units) {
-  return units.filter((unit) => Number.isFinite(unit.aiWaveSentAt));
+function aiWaveAttackDuration(hostileArmy, hostilePower) {
+  return clamp(8 + hostileArmy * 0.08 + hostilePower / 220, 8, 18);
+}
+
+function aiActiveWaveUnits(ai, units) {
+  return units.filter((unit) => ai.currentWaveId && unit.aiWaveId === ai.currentWaveId);
 }
 
 function aiReserveUnits(units) {
   return units.filter((unit) => !Number.isFinite(unit.aiWaveSentAt));
 }
 
-function aiLaunchWave(ai, units, preferredTarget) {
+function aiLaunchWave(ai, units, preferredTarget, hostileArmy, hostilePower) {
   if (!units.length || !preferredTarget) return false;
   ai.waveCounter = (ai.waveCounter || 0) + 1;
+  ai.currentWaveId = ai.waveCounter;
+  ai.waveAttackUntil = state.gameTime + aiWaveAttackDuration(hostileArmy, hostilePower);
+  ai.waveAttackTargetId = preferredTarget.id;
   for (const unit of units) {
     unit.aiWaveId = ai.waveCounter;
     unit.aiWaveSentAt = state.gameTime;
@@ -2350,23 +2357,30 @@ function aiUpdate(dt) {
     const perimeterProgress = aiPerimeterProgress(ai);
     const armyContained = aiArmyInsidePerimeter(ai, ownedArmy, 4);
     const reserveArmy = aiReserveUnits(ownedArmy);
-    const activeWaveUnits = aiActiveWaveUnits(ownedArmy);
+    const committedWaveActive = Boolean(ai.waveAttackUntil) && state.gameTime < ai.waveAttackUntil;
+    const activeWaveUnits = aiActiveWaveUnits(ai, ownedArmy);
     const reservePower = aiArmyPower(reserveArmy);
     const waveTargetPower = aiWaveTargetPower(hostilePower, hostileArmy);
     const attackReady = !graceActive && aiCanAttack(ai, ownedArmy, preferredTarget, hostileArmy);
     const hasAdvantage = attackReady && armyPower >= Math.max(hostilePower * 1.08, 64);
     const shouldChargeWave = hasAdvantage && reserveArmy.length > 0 && reservePower >= waveTargetPower * 0.72;
-    if (!shouldChargeWave || !preferredTarget) {
+    if (!committedWaveActive && (!shouldChargeWave || !preferredTarget)) {
       ai.waveChargeUntil = 0;
       ai.waveChargeTargetId = null;
-    } else if (!ai.waveChargeUntil) {
+    } else if (!committedWaveActive && !ai.waveChargeUntil) {
       ai.waveChargeUntil = state.gameTime + aiWaveChargeDuration(hostilePower, hostileArmy, reservePower);
       ai.waveChargeTargetId = preferredTarget.id;
     }
     const waveReady = Boolean(ai.waveChargeUntil) && state.gameTime >= ai.waveChargeUntil && hasAdvantage && reserveArmy.length > 0 && reservePower >= waveTargetPower;
-    aiSetCombatFormation(ai, armySize, hostileArmy, Boolean(ai.waveChargeUntil) || activeWaveUnits.length > 0);
+    if (!committedWaveActive && !activeWaveUnits.length) {
+      ai.currentWaveId = 0;
+      ai.waveAttackUntil = 0;
+      ai.waveAttackTargetId = null;
+    }
+    aiSetCombatFormation(ai, armySize, hostileArmy, Boolean(ai.waveChargeUntil) || committedWaveActive || activeWaveUnits.length > 0);
     ai.bridgeTimer = Math.max(0, (ai.bridgeTimer || 0) - dt);
-    if ((waveReady || activeWaveUnits.length > 0) && preferredTarget && ai.bridgeTimer <= 0 && aiTryBuildBridgeForAttack(ai, ownedArmy, preferredTarget)) ai.bridgeTimer = 10;
+    const committedTarget = state.structures.find((s) => s.id === ai.waveAttackTargetId) || preferredTarget;
+    if ((waveReady || committedWaveActive || activeWaveUnits.length > 0) && committedTarget && ai.bridgeTimer <= 0 && aiTryBuildBridgeForAttack(ai, ownedArmy, committedTarget)) ai.bridgeTimer = 10;
 
     if (graceActive) {
       // During grace period, rally units near base - they can defend but not advance
@@ -2376,19 +2390,19 @@ function aiUpdate(dt) {
           if (Math.hypot(unit.x - rally.x, unit.y - rally.y) > 28) moveUnitTo(unit, rally.x, rally.y + Math.random() * 10 - 5, null);
         }
       }
-    } else if (perimeterProgress.complete && !armyContained && !attackReady) {
+    } else if (!committedWaveActive && perimeterProgress.complete && !armyContained && !attackReady) {
       for (const unit of ownedArmy) {
         const rally = aiNearestInsidePerimeterPoint(ai, unit, 16);
         moveUnitTo(unit, rally.x, rally.y, null);
       }
     } else {
-      if (preferredTarget) {
+      if (committedTarget) {
         for (const unit of activeWaveUnits) {
-          if (distanceToItemFromPoint(preferredTarget, unit) > unitTypes[unit.type].range + 8) moveUnitTo(unit, rectCenter(preferredTarget).x, rectCenter(preferredTarget).y, preferredTarget.id);
+          if (distanceToItemFromPoint(committedTarget, unit) > unitTypes[unit.type].range + 8) moveUnitTo(unit, rectCenter(committedTarget).x, rectCenter(committedTarget).y, committedTarget.id);
         }
       }
       if (waveReady && preferredTarget) {
-        aiLaunchWave(ai, reserveArmy, preferredTarget);
+        aiLaunchWave(ai, reserveArmy, preferredTarget, hostileArmy, hostilePower);
         ai.waveChargeUntil = 0;
         ai.waveChargeTargetId = null;
       }
@@ -2829,7 +2843,7 @@ function seedGame() {
   for (const spawn of state.currentMap.spawns.filter((s) => s.owner !== "player")) {
     const castle = spawnStructure("castle", spawn.owner, spawn.x, spawn.y);
     castle.id = `castle-${spawn.owner}`;
-    state.aiPlayers.push({ owner: spawn.owner, money: 1300, wood: 160, stone: 80, unitTimer: 2 + Math.random() * 2, buildTimer: 6 + Math.random() * 5, bridgeTimer: 0, attackBias: 0, formation: "normal", waveCounter: 0, waveChargeUntil: 0, waveChargeTargetId: null, perimeterPlan: createInitialAiPerimeterPlan(spawn) });
+    state.aiPlayers.push({ owner: spawn.owner, money: 1300, wood: 160, stone: 80, unitTimer: 2 + Math.random() * 2, buildTimer: 6 + Math.random() * 5, bridgeTimer: 0, attackBias: 0, formation: "normal", waveCounter: 0, currentWaveId: 0, waveChargeUntil: 0, waveChargeTargetId: null, waveAttackUntil: 0, waveAttackTargetId: null, perimeterPlan: createInitialAiPerimeterPlan(spawn) });
     spawnStructure("tower", spawn.owner, spawn.x + (spawn.x > state.currentMap.width / 2 ? -22 : 22), spawn.y);
   }
   spawnUnit("soldier", "player", playerSpawn.x + 14, playerSpawn.y + 2);
