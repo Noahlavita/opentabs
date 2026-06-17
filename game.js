@@ -1921,8 +1921,9 @@ function aiDefensePowerAgainst(ai, target) {
 function aiCanAttack(ai, ownedArmy, target, hostileArmy) {
   if (!target) return false;
   const armyPower = aiArmyPower(ownedArmy);
-  const hostilePower = aiArmyPower(state.units.filter((u) => u.owner !== ai.owner && u.type !== "miner"));
-  const hostileMilitaryStructures = state.structures.filter((s) => s.owner !== ai.owner && ["tower", "castle", "cannon", "barracks", "fabbro"].includes(s.type));
+  const targetOwner = target.owner;
+  const hostilePower = aiArmyPower(state.units.filter((u) => u.owner === targetOwner && u.type !== "miner"));
+  const hostileMilitaryStructures = state.structures.filter((s) => s.owner === targetOwner && ["tower", "castle", "cannon", "barracks", "fabbro"].includes(s.type));
   const structurePressure = hostileMilitaryStructures.reduce((sum, structure) => {
     const level = structure.level || 1;
     const hpFactor = 0.35 + structureHpPercent(structure);
@@ -2379,14 +2380,17 @@ function aiUpdate(dt) {
     }
 
     const ownedArmy = state.units.filter((u) => u.owner === ai.owner && u.type !== "miner");
-    const hostileCombatUnits = state.units.filter((u) => u.owner !== ai.owner && u.type !== "miner");
     const armySize = ownedArmy.reduce((sum, unit) => sum + unitCount(unit), 0);
+    const spawn = state.currentMap.spawns.find((s) => s.owner === ai.owner);
+    const preferredTarget = spawn ? aiPreferredTarget(ai, spawn) : null;
+    const focusedEnemyOwner = preferredTarget?.owner || null;
+    const hostileCombatUnits = focusedEnemyOwner
+      ? state.units.filter((u) => u.owner === focusedEnemyOwner && u.type !== "miner")
+      : state.units.filter((u) => u.owner !== ai.owner && u.type !== "miner");
+    const perimeterProgress = aiPerimeterProgress(ai);
     const hostileArmy = hostileCombatUnits.reduce((sum, unit) => sum + unitCount(unit), 0);
     const armyPower = aiArmyPower(ownedArmy);
     const hostilePower = aiArmyPower(hostileCombatUnits);
-    const spawn = state.currentMap.spawns.find((s) => s.owner === ai.owner);
-    const preferredTarget = spawn ? aiPreferredTarget(ai, spawn) : null;
-    const perimeterProgress = aiPerimeterProgress(ai);
     const armyContained = aiArmyInsidePerimeter(ai, ownedArmy, 4);
     const reserveArmy = aiReserveUnits(ownedArmy);
     const committedWaveActive = Boolean(ai.waveAttackUntil) && state.gameTime < ai.waveAttackUntil;
